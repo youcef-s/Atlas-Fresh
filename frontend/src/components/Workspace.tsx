@@ -5,14 +5,16 @@ import { ProductionView } from './ProductionView'
 import { CommercialView } from './CommercialView'
 import { TraceView, type TraceFilter } from './TraceView'
 import { LocalView } from './LocalView'
+import { AssistantView } from './AssistantView'
 
-export type Tab = 'production' | 'commercial' | 'trace' | 'local'
+export type Tab = 'production' | 'commercial' | 'trace' | 'local' | 'assist'
 
 const TABS: { id: Tab; label: string; hint: string }[] = [
   { id: 'production', label: 'Production', hint: 'Plan vs actual by farm' },
   { id: 'commercial', label: 'Commercial', hint: 'Client service' },
   { id: 'trace', label: 'Allocation trace', hint: 'Farm → client' },
   { id: 'local', label: 'Local residual', hint: 'Fruit not exported' },
+  { id: 'assist', label: 'Explain', hint: 'Ask the assistant' },
 ]
 
 /** Cross-view navigation: every ID in the workspace can jump to where it is explained. */
@@ -31,7 +33,7 @@ export function Workspace({ load, plan }: { load: LoadResult; plan: PlanResult }
   const [segmentFocus, setSegmentFocus] = useState<Segment | null>(null)
   const [traceFilter, setTraceFilter] = useState<TraceFilter>({})
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({
-    production: null, commercial: null, trace: null, local: null,
+    production: null, commercial: null, trace: null, local: null, assist: null,
   })
   const panel = useRef<HTMLDivElement>(null)
 
@@ -85,7 +87,7 @@ export function Workspace({ load, plan }: { load: LoadResult; plan: PlanResult }
             </button>
           ))}
         </div>
-        <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="panel">
+        <div role="tabpanel" id={tab === 'assist' ? undefined : `panel-${tab}`} aria-labelledby={`tab-${tab}`} className="panel" hidden={tab === 'assist'}>
           {tab === 'production' && (
             <ProductionView
               plan={plan}
@@ -103,6 +105,10 @@ export function Workspace({ load, plan }: { load: LoadResult; plan: PlanResult }
             <TraceView plan={plan} nav={nav} filter={traceFilter} setFilter={setTraceFilter} />
           )}
           {tab === 'local' && <LocalView plan={plan} nav={nav} />}
+        </div>
+        {/* Kept mounted so an answer survives jumping to its evidence and back. */}
+        <div role="tabpanel" id="panel-assist" aria-labelledby="tab-assist" className="panel" hidden={tab !== 'assist'}>
+          <AssistantView plan={plan} nav={nav} />
         </div>
       </div>
     </>

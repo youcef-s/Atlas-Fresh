@@ -111,6 +111,11 @@ function ClientDetail({ plan, client: c, nav }: { plan: PlanResult; client: Clie
     .filter((b) => c.compatible_segments.includes(b.segment) && b.variance_t < -0.05)
     .sort((a, b) => a.variance_t - b.variance_t)
     .slice(0, 6)
+  const earlier = plan.clients.filter((o) => o.priority < c.priority)
+  const pricier = earlier.filter((o) => o.price_per_t_eur > c.price_per_t_eur).length
+  const compatibleLocal = plan.segments
+    .filter((s) => c.compatible_segments.includes(s.segment))
+    .reduce((sum, s) => sum + s.local_t, 0)
   const higher = plan.clients.filter(
     (o) => o.priority < c.priority && o.compatible_segments.some((s) => c.compatible_segments.includes(s)) && o.allocated_t > 0,
   )
@@ -167,10 +172,11 @@ function ClientDetail({ plan, client: c, nav }: { plan: PlanResult; client: Clie
             )}
             {higher.length > 0 && (
               <p className="small muted">
-                Served first (higher price):{' '}
+                Served first:{' '}
                 {higher.map((o) => (
-                  <button key={o.client_id} type="button" className="id-chip" onClick={() => nav.client(o.client_id)}>
-                    {o.client_id} {eur(o.price_per_t_eur)}/t
+                  <button key={o.client_id} type="button" className="id-chip" onClick={() => nav.client(o.client_id)}
+                    title={o.price_per_t_eur > c.price_per_t_eur ? 'Higher price' : 'Same price, earlier client ID'}>
+                    {o.client_id} {eur(o.price_per_t_eur)}/t{o.price_per_t_eur === c.price_per_t_eur ? ' (tie → ID)' : ''}
                   </button>
                 ))}
               </p>
@@ -181,10 +187,16 @@ function ClientDetail({ plan, client: c, nav }: { plan: PlanResult; client: Clie
           <div>
             <h4>Why capacity ran out</h4>
             <p className="small">
-              {plan.clients.filter((o) => o.priority < c.priority).length} higher-priced orders used{' '}
-              {t(plan.kpis.station_capacity_t - c.station_remaining_before_t)} of the {t(plan.kpis.station_capacity_t)} line
-              before this order’s turn. Compatible fruit was still available: see the{' '}
-              <button type="button" className="link" onClick={nav.local}>local residual</button>.
+              {earlier.length} orders ahead of it in the policy order ({pricier} at a higher price
+              {earlier.length > pricier ? `, ${earlier.length - pricier} at the same price with an earlier client ID` : ''})
+              used {t(plan.kpis.station_capacity_t - c.station_remaining_before_t)} of the {t(plan.kpis.station_capacity_t)} line
+              before this order’s turn.{' '}
+              {compatibleLocal > 0 ? (
+                <>
+                  {t(compatibleLocal)} of fruit it accepts is going local instead: see the{' '}
+                  <button type="button" className="link" onClick={nav.local}>local residual</button>.
+                </>
+              ) : 'No fruit it accepts is left over.'}
             </p>
           </div>
         )}

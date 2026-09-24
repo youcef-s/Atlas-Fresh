@@ -153,3 +153,24 @@ export interface PlanResult {
   segments: SegmentSummary[]
   invariants: InvariantCheck[]
 }
+
+export type QuestionId = 'at_risk' | 'gaps' | 'local' | 'custom'
+export type AssistantStatus =
+  | 'answered' | 'unavailable' | 'no_key' | 'timeout' | 'provider_error' | 'invalid_output'
+
+export interface AssistantAnswer {
+  question: string
+  status: AssistantStatus
+  model: string | null
+  answer: string | null
+  citations: string[]
+  notice: string | null
+  deterministic_summary: string | null
+  deterministic_citations: string[]
+  context_ids: string[]
+}
+
+export interface AssistantConfig {
+  configured: boolean
+  model: string | null
+}

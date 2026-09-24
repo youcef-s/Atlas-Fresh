@@ -37,6 +37,7 @@ STATION_COLUMNS = ["station_id", "export_conditioning_capacity_t", "local_market
 PRICE_COLUMNS = ["segment", "reference_export_price_per_t_eur"]
 
 MIX_TOLERANCE = 1e-6
+TABLE_HEADERS = {"farm_id", "client_id", "station_id", "segment"}
 
 
 class WorkbookInvalid(Exception):
@@ -81,11 +82,24 @@ def _table(
             issues.add(ws.title, "header", f"Missing column(s): {', '.join(missing)}")
             return None
         out: list[tuple[int, dict[str, Any]]] = []
+        ended = False
         for offset, data in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
             values = {c: data[header[c]] if header[c] < len(data) else None for c in columns}
-            if all(v is None or _text(v) == "" for v in values.values()):
-                break
-            out.append((offset, values))
+            if _text(data[0] if data else None) in TABLE_HEADERS:
+                break  # next table on the same sheet
+            blank = all(v is None or _text(v) == "" for v in values.values())
+            if not ended:
+                if blank:
+                    ended = True
+                else:
+                    out.append((offset, values))
+            elif _text(values[columns[0]]) and any(_is_number(values[c]) for c in columns[1:]):
+                # Never drop rows silently: data after a blank row is an error, not an end marker.
+                issues.add(
+                    ws.title,
+                    _text(values[columns[0]]),
+                    f"Row {offset} looks like data after a blank row; remove the blank row",
+                )
         return out
     issues.add(ws.title, "header", f"Header row starting with '{columns[0]}' not found")
     return None
@@ -303,16 +317,17 @@ def _parse_station(ws: Worksheet, issues: _Collector) -> Station | None:
     )
 
 
-def load_snapshot(source: Path) -> Snapshot:
+def load_snapshot(source: Path, display_name: str | None = None) -> Snapshot:
     """Read the workbook read-only and return a validated snapshot or raise WorkbookInvalid."""
     issues = _Collector()
+    name = display_name or source.name
     try:
         wb = openpyxl.load_workbook(source, read_only=True, data_only=True)
     except FileNotFoundError:
-        issues.add("Workbook", str(source.name), "Workbook file not found on the server")
+        issues.add("Workbook", name, "Workbook file not found on the server")
         raise WorkbookInvalid(issues.issues) from None
     except Exception as exc:  # corrupt or non-xlsx file
-        issues.add("Workbook", str(source.name), f"Workbook could not be read: {exc}")
+        issues.add("Workbook", name, f"Workbook could not be read: {exc}")
         raise WorkbookInvalid(issues.issues) from exc
 
     try:

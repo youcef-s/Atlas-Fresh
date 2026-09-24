@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.assistant import AssistantAnswer, AssistantRequest, ask, configured_provider
 from app.models import InputIssue, PlanResult, Snapshot
 from app.planning import run_plan
 from app.validation import WorkbookInvalid, load_snapshot
@@ -62,7 +63,7 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 def _load_from(path: Path, source: str) -> LoadResult | JSONResponse:
     try:
-        snapshot = load_snapshot(path)
+        snapshot = load_snapshot(path, display_name=source)
     except WorkbookInvalid as exc:
         _state["snapshot"] = None
         return _error(
@@ -85,10 +86,13 @@ def load() -> LoadResult | JSONResponse:
 
 
 @app.post("/api/load/upload", response_model=LoadResult, responses={422: {"model": ErrorBody}})
-async def load_upload(file: UploadFile) -> LoadResult | JSONResponse:
-    """Validate an edited copy of the workbook (e.g. to demo rejection). The source is untouched."""
-    data = await file.read(MAX_UPLOAD_BYTES + 1)
-    name = file.filename or "upload.xlsx"
+def load_upload(file: UploadFile) -> LoadResult | JSONResponse:
+    """Validate an edited copy of the workbook (e.g. to demo rejection). The source is untouched.
+
+    Sync handler on purpose: FastAPI runs it in a worker thread, so parsing never blocks the loop.
+    """
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    name = Path(file.filename or "").name or "upload.xlsx"  # display only, never a path
     if len(data) > MAX_UPLOAD_BYTES:
         _state["snapshot"] = None
         return _error(
@@ -100,7 +104,7 @@ async def load_upload(file: UploadFile) -> LoadResult | JSONResponse:
             ),
         )
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / (Path(name).name or "upload.xlsx")
+        path = Path(tmp) / "upload.xlsx"
         path.write_bytes(data)
         return _load_from(path, name)
 
@@ -111,6 +115,34 @@ def plan() -> PlanResult | JSONResponse:
     if snapshot is None:
         return _error(409, ErrorBody(kind="not_loaded", message="Load today's workbook first."))
     return run_plan(snapshot)
+
+
+class AssistantStatusBody(BaseModel):
+    configured: bool
+    model: str | None
+
+
+@app.get("/api/assistant/status", response_model=AssistantStatusBody)
+def assistant_status() -> AssistantStatusBody:
+    _, model = configured_provider()
+    return AssistantStatusBody(configured=model is not None, model=model)
+
+
+@app.post(
+    "/api/assistant",
+    response_model=AssistantAnswer,
+    responses={409: {"model": ErrorBody}, 422: {"model": ErrorBody}},
+)
+def assistant(request: AssistantRequest) -> AssistantAnswer | JSONResponse:
+    """Explain the calculated plan. Read-only: never changes the snapshot or the plan."""
+    snapshot = _state["snapshot"]
+    if snapshot is None:
+        return _error(409, ErrorBody(kind="not_loaded", message="Load today's workbook first."))
+    provider, model = configured_provider()
+    try:
+        return ask(request, run_plan(snapshot), snapshot, provider, model)
+    except ValueError as exc:
+        return _error(422, ErrorBody(kind="validation", message=str(exc)))
 
 
 @app.exception_handler(Exception)

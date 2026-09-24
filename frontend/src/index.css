@@ -279,3 +279,28 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
   .decide-grid { grid-template-columns: 1fr; }
 }
 [tabindex='-1']:focus { outline: none; }
+
+/* assistant */
+.health.neutral { background: var(--surface-2); color: var(--muted); }
+.ask-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.ask-form { display: flex; gap: 8px; margin-bottom: 14px; max-width: 820px; }
+.ask-form input {
+  flex: 1; font: inherit; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.ask-result { max-width: 820px; }
+.ask-result:focus { outline: none; }
+.answer-card {
+  background: var(--surface); border: 1px solid var(--border); border-left-width: 4px;
+  border-radius: var(--radius); padding: 12px 16px; margin-bottom: 10px;
+}
+.answer-card h3 { display: flex; gap: 8px; align-items: baseline; }
+.answer-card.ai { border-left-color: var(--accent); }
+.answer-card.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.answer-card.danger { border-left-color: var(--neg); background: var(--neg-bg); }
+.answer-card.det { border-left-color: var(--muted); }
+.tag {
+  font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+}
+.spinner.inline { display: inline-block; width: 12px; height: 12px; border-width: 2px; margin: 0 6px -1px 0; }
