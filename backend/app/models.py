@@ -1,103 +1,53 @@
-"""Core domain models for Atlas Fresh planning."""
-from enum import Enum
-from pydantic import BaseModel, Field, field_validator
-from typing import Literal
+"""Domain models: validated source data (inputs) and computed plan (outputs) are kept separate."""
+
+from enum import StrEnum
+
+from pydantic import BaseModel
 
 
-class Segment(str, Enum):
+class Segment(StrEnum):
     A = "A"
     B = "B"
     C = "C"
     D = "D"
 
     @property
-    def quality_order(self) -> int:
-        return {"A": 0, "B": 1, "C": 2, "D": 3}[self.value]
-
-    def is_compatible_with(self, requested: "Segment", mode: "AcceptanceMode") -> bool:
-        if mode == AcceptanceMode.EXACT:
-            return self == requested
-        return self.quality_order <= requested.quality_order
+    def rank(self) -> int:
+        """0 = best quality (A), 3 = lowest (D)."""
+        return SEGMENTS.index(self)
 
 
-class AcceptanceMode(str, Enum):
+SEGMENTS: tuple[Segment, ...] = (Segment.A, Segment.B, Segment.C, Segment.D)
+
+
+class AcceptanceMode(StrEnum):
     EXACT = "EXACT"
     MINIMUM = "MINIMUM"
 
 
-class ShortageReason(str, Enum):
-    INSUFFICIENT_COMPATIBLE_SEGMENT = "INSUFFICIENT_COMPATIBLE_SEGMENT"
-    STATION_CAPACITY_REACHED = "STATION_CAPACITY_REACHED"
-
-
-class ClientStatus(str, Enum):
+class ClientStatus(StrEnum):
     COMPLETE = "COMPLETE"
     PARTIAL = "PARTIAL"
     UNSERVED = "UNSERVED"
 
 
-class FarmPlan(BaseModel):
+class ShortageReason(StrEnum):
+    INSUFFICIENT_COMPATIBLE_SEGMENT = "INSUFFICIENT_COMPATIBLE_SEGMENT"
+    STATION_CAPACITY_REACHED = "STATION_CAPACITY_REACHED"
+
+
+# ---------------------------------------------------------------- source data
+
+
+class Farm(BaseModel):
     farm_id: str
     farm_name: str
-    expected_daily_capacity_t: float
-    expected_A_pct: float
-    expected_B_pct: float
-    expected_C_pct: float
-    expected_D_pct: float
-    actual_A_t: float
-    actual_B_t: float
-    actual_C_t: float
-    actual_D_t: float
+    expected_capacity_t: float
+    expected_mix: dict[Segment, float]
+    actual_t: dict[Segment, int]
 
-    @field_validator("expected_A_pct", "expected_B_pct", "expected_C_pct", "expected_D_pct")
-    @classmethod
-    def validate_pct_range(cls, v: float) -> float:
-        if not 0 <= v <= 1:
-            raise ValueError("Expected mix percentages must be between 0 and 1")
-        return v
-
-    @property
-    def expected_mix_sum(self) -> float:
-        return self.expected_A_pct + self.expected_B_pct + self.expected_C_pct + self.expected_D_pct
-
-    @property
-    def expected_A_t(self) -> float:
-        return self.expected_daily_capacity_t * self.expected_A_pct
-
-    @property
-    def expected_B_t(self) -> float:
-        return self.expected_daily_capacity_t * self.expected_B_pct
-
-    @property
-    def expected_C_t(self) -> float:
-        return self.expected_daily_capacity_t * self.expected_C_pct
-
-    @property
-    def expected_D_t(self) -> float:
-        return self.expected_daily_capacity_t * self.expected_D_pct
-
-    @property
-    def actual_total_t(self) -> float:
-        return self.actual_A_t + self.actual_B_t + self.actual_C_t + self.actual_D_t
-
-    def get_actual(self, segment: Segment) -> float:
-        return {
-            Segment.A: self.actual_A_t,
-            Segment.B: self.actual_B_t,
-            Segment.C: self.actual_C_t,
-            Segment.D: self.actual_D_t,
-        }[segment]
-
-    def get_expected(self, segment: Segment) -> float:
-        return {
-            Segment.A: self.expected_A_t,
-            Segment.B: self.expected_B_t,
-            Segment.C: self.expected_C_t,
-            Segment.D: self.expected_D_t,
-        }[segment]
-
-    def get_variance(self, segment: Segment) -> float:
-        return self.get_actual(segment) - self.get_expected(segment)
+    def expected_t(self, segment: Segment) -> float:
+        return self.expected_capacity_t * self.expected_mix[segment]
 
 
 class Client(BaseModel):
@@ -105,64 +55,76 @@ class Client(BaseModel):
     client_name: str
     acceptance_mode: AcceptanceMode
     requested_segment: Segment
-    demand_t: float
-    export_price_per_t_eur: float
+    demand_t: int
+    price_per_t_eur: float
 
-    @field_validator("demand_t")
-    @classmethod
-    def validate_demand_multiple_of_5(cls, v: float) -> float:
-        if v < 0 or v % 5 != 0:
-            raise ValueError("Demand must be non-negative multiple of 5")
-        return v
-
-
-class StationConfig(BaseModel):
-    station_id: str
-    export_conditioning_capacity_t: float
-    local_market_ratio: float
-
-
-class ReferencePrices(BaseModel):
-    prices: dict[Segment, float]
-
-    def get_price(self, segment: Segment) -> float:
-        return self.prices[segment]
-
-
-class FarmSegmentSupply(BaseModel):
-    farm_id: str
-    farm_name: str
-    segment: Segment
-    available_t: float
-    allocated_t: float = 0.0
+    def accepts(self, segment: Segment) -> bool:
+        if self.acceptance_mode is AcceptanceMode.EXACT:
+            return segment == self.requested_segment
+        return segment.rank <= self.requested_segment.rank
 
     @property
-    def remaining_t(self) -> float:
-        return self.available_t - self.allocated_t
+    def compatible_segments(self) -> list[Segment]:
+        return [s for s in SEGMENTS if self.accepts(s)]
+
+
+class Station(BaseModel):
+    station_id: str
+    capacity_t: int
+    local_market_ratio: float
+    reference_price_per_t_eur: dict[Segment, float]
+
+
+class Snapshot(BaseModel):
+    farms: list[Farm]
+    clients: list[Client]
+    station: Station
+
+
+class InputIssue(BaseModel):
+    sheet: str
+    identifier: str
+    field: str | None = None
+    message: str
+
+
+# ------------------------------------------------------------------- results
 
 
 class AllocationRow(BaseModel):
+    sequence: int
     farm_id: str
     farm_name: str
     segment: Segment
     client_id: str
     client_name: str
-    tonnes: float
-    quality_upgrade: bool
+    requested_segment: Segment
+    upgrade_steps: int
+    tonnes: int
+    price_per_t_eur: float
     export_revenue_eur: float
 
 
 class ClientResult(BaseModel):
+    priority: int
     client_id: str
     client_name: str
     acceptance_mode: AcceptanceMode
     requested_segment: Segment
-    demand_t: float
-    allocated_t: float
-    remaining_t: float
+    compatible_segments: list[Segment]
+    price_per_t_eur: float
+    demand_t: int
+    allocated_t: int
+    remaining_t: int
     export_revenue_eur: float
     status: ClientStatus
-    shortage_reason: ShortageReason | None = None
+    shortage_reason: ShortageReason | None
+    # Deterministic context that links a client shortage back to production.
+    compatible_expected_t: float
+    compatible_actual_t: int
+    compatible_taken_by_higher_priority_t: int
+    station_remaining_before_t: int
+    source_farm_ids: list[str]
 
 
 class FarmSegmentBalance(BaseModel):
@@ -170,48 +132,61 @@ class FarmSegmentBalance(BaseModel):
     farm_name: str
     segment: Segment
     expected_t: float
-    actual_t: float
-    allocated_t: float
-    local_t: float
+    actual_t: int
     variance_t: float
+    exported_t: int
+    local_t: int
+    local_value_eur: float
+    client_ids: list[str]
 
 
-class KPIGroup(BaseModel):
+class FarmSummary(BaseModel):
+    farm_id: str
+    farm_name: str
+    expected_capacity_t: float
+    actual_t: int
+    variance_t: float
+    exported_t: int
+    local_t: int
+    local_value_eur: float
+
+
+class SegmentSummary(BaseModel):
+    segment: Segment
+    expected_t: float
+    actual_t: int
+    variance_t: float
+    exported_t: int
+    local_t: int
+    reference_price_per_t_eur: float
+    local_value_eur: float
+    export_equivalent_value_eur: float
+
+
+class Kpis(BaseModel):
     expected_plan_t: float
-    actual_received_t: float
-    station_capacity_t: float
-    export_t: float
+    actual_received_t: int
+    station_capacity_t: int
+    export_t: int
+    station_utilization_pct: float
     export_rate_pct: float
-    local_t: float
+    local_t: int
     export_revenue_eur: float
     local_value_eur: float
     total_value_eur: float
     at_risk_clients: int
 
 
-class PlanningResult(BaseModel):
+class InvariantCheck(BaseModel):
+    name: str
+    passed: bool
+
+
+class PlanResult(BaseModel):
+    kpis: Kpis
     allocations: list[AllocationRow]
-    client_results: list[ClientResult]
-    farm_segment_balances: list[FarmSegmentBalance]
-    kpis: KPIGroup
-
-
-class ValidationError(BaseModel):
-    sheet: str
-    identifier: str
-    message: str
-
-
-class LoadResponse(BaseModel):
-    success: bool
-    farms: list[FarmPlan] | None = None
-    clients: list[Client] | None = None
-    station: StationConfig | None = None
-    reference_prices: ReferencePrices | None = None
-    errors: list[ValidationError] = []
-
-
-class PlanResponse(BaseModel):
-    success: bool
-    result: PlanningResult | None = None
-    error: str | None = None
+    clients: list[ClientResult]
+    farm_segments: list[FarmSegmentBalance]
+    farms: list[FarmSummary]
+    segments: list[SegmentSummary]
+    invariants: list[InvariantCheck]
