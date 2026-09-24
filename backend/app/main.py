@@ -2,9 +2,10 @@
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -56,10 +57,10 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/load", response_model=LoadResult, responses={422: {"model": ErrorBody}})
-def load() -> LoadResult | JSONResponse:
-    """Seed action: load and validate the supplied workbook on the server."""
-    path = workbook_path()
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def _load_from(path: Path, source: str) -> LoadResult | JSONResponse:
     try:
         snapshot = load_snapshot(path)
     except WorkbookInvalid as exc:
@@ -68,12 +69,40 @@ def load() -> LoadResult | JSONResponse:
             422,
             ErrorBody(
                 kind="validation",
-                message="The workbook was rejected. Fix the rows below and reload.",
+                message="Correct the rows below in the workbook, then load it again.",
                 issues=exc.issues,
             ),
         )
     _state["snapshot"] = snapshot
-    return LoadResult(source=path.name, snapshot=snapshot)
+    return LoadResult(source=source, snapshot=snapshot)
+
+
+@app.post("/api/load", response_model=LoadResult, responses={422: {"model": ErrorBody}})
+def load() -> LoadResult | JSONResponse:
+    """Seed action: load and validate the supplied workbook on the server."""
+    path = workbook_path()
+    return _load_from(path, path.name)
+
+
+@app.post("/api/load/upload", response_model=LoadResult, responses={422: {"model": ErrorBody}})
+async def load_upload(file: UploadFile) -> LoadResult | JSONResponse:
+    """Validate an edited copy of the workbook (e.g. to demo rejection). The source is untouched."""
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    name = file.filename or "upload.xlsx"
+    if len(data) > MAX_UPLOAD_BYTES:
+        _state["snapshot"] = None
+        return _error(
+            422,
+            ErrorBody(
+                kind="validation",
+                message="The file is larger than 5 MB.",
+                issues=[InputIssue(sheet="Workbook", identifier=name, message="File too large")],
+            ),
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / (Path(name).name or "upload.xlsx")
+        path.write_bytes(data)
+        return _load_from(path, name)
 
 
 @app.post("/api/plan", response_model=PlanResult, responses={409: {"model": ErrorBody}})
